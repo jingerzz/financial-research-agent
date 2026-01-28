@@ -48,13 +48,18 @@ def get_rag_manager():
     return st.session_state.rag_manager
 
 
-def get_rag_context(query: str, accession_numbers: Optional[List[str]] = None) -> tuple[str, int]:
+def get_rag_context(
+    query: str,
+    accession_numbers: Optional[List[str]] = None,
+    project_id: Optional[str] = None
+) -> tuple[str, int]:
     """
     Retrieve relevant context using RAG for a query.
 
     Args:
         query: User query to search for
         accession_numbers: Optional list of accession numbers to filter by
+        project_id: Optional project ID to include project documents
 
     Returns:
         Tuple of (context string, number of chunks retrieved)
@@ -73,14 +78,20 @@ def get_rag_context(query: str, accession_numbers: Optional[List[str]] = None) -
             for lf in st.session_state.loaded_filings:
                 accession_numbers.append(lf.filing_info.accession_number)
 
-    if not accession_numbers:
+    # Get project_id from session state if not provided
+    if project_id is None:
+        project_id = st.session_state.get("active_project_id")
+
+    # Need at least some filter criteria
+    if not accession_numbers and not project_id:
         return "", 0
 
-    # Retrieve relevant chunks
+    # Retrieve relevant chunks (from both filings and project documents)
     chunks = rag_manager.retrieve(
         query=query,
         top_k=config.rag.top_k,
-        accession_numbers=accession_numbers,
+        accession_numbers=accession_numbers if accession_numbers else None,
+        project_id=project_id,
         similarity_threshold=config.rag.similarity_threshold
     )
 
@@ -98,46 +109,153 @@ def get_rag_context(query: str, accession_numbers: Optional[List[str]] = None) -
     return context, len(chunks)
 
 
+def get_credential_mgr():
+    """Get or create the credential manager singleton."""
+    if "credential_manager" not in st.session_state:
+        try:
+            from core.credential_manager import get_credential_manager
+            st.session_state.credential_manager = get_credential_manager()
+        except ImportError as e:
+            logger.warning(f"Credential manager not available: {e}")
+            st.session_state.credential_manager = None
+        except Exception as e:
+            logger.error(f"Error initializing credential manager: {e}")
+            st.session_state.credential_manager = None
+    return st.session_state.credential_manager
+
+
 def get_api_key(provider: str) -> tuple[Optional[str], str]:
     """
     Get API key from various sources in priority order.
 
+    Priority:
+    1. Environment variable
+    2. Streamlit secrets
+    3. OS Keyring (via credential manager)
+    4. Encrypted local file (via credential manager)
+    5. Session state (temporary)
+
     Returns:
         Tuple of (api_key, source) where source indicates where the key came from.
     """
-    # Map provider to environment variable and secrets key
-    env_var_map = {
-        "openai": "OPENAI_API_KEY",
-        "claude": "ANTHROPIC_API_KEY",
-        "gemini": "GOOGLE_API_KEY"
+    # Map UI provider names to credential manager provider names
+    provider_map = {
+        "openai": "openai",
+        "claude": "anthropic",
+        "gemini": "google"
     }
-    secret_key_map = {
-        "openai": "openai_api_key",
-        "claude": "anthropic_api_key",
-        "gemini": "google_api_key"
-    }
+    
+    cred_provider = provider_map.get(provider, provider)
+    
+    # Try credential manager first (handles env vars, secrets, keyring, encrypted file)
+    cred_mgr = get_credential_mgr()
+    if cred_mgr:
+        key, source = cred_mgr.get_key(cred_provider)
+        if key:
+            return key, source
+    else:
+        # Fallback if credential manager not available
+        env_var_map = {
+            "openai": "OPENAI_API_KEY",
+            "claude": "ANTHROPIC_API_KEY",
+            "gemini": "GOOGLE_API_KEY"
+        }
+        secret_key_map = {
+            "openai": "openai_api_key",
+            "claude": "anthropic_api_key",
+            "gemini": "google_api_key"
+        }
 
-    env_var = env_var_map.get(provider, "ANTHROPIC_API_KEY")
-    secret_key = secret_key_map.get(provider, "anthropic_api_key")
+        env_var = env_var_map.get(provider, "ANTHROPIC_API_KEY")
+        secret_key = secret_key_map.get(provider, "anthropic_api_key")
+
+        # Check environment variable
+        env_key = os.environ.get(env_var)
+        if env_key:
+            return env_key, "environment"
+
+        # Check Streamlit secrets
+        try:
+            if secret_key in st.secrets:
+                return st.secrets[secret_key], "secrets"
+        except Exception:
+            pass
+
+    # Last resort: Check session state (temporary, lost on refresh)
     session_key = f"{provider}_api_key"
-
-    # 1. Check environment variable (most secure)
-    env_key = os.environ.get(env_var)
-    if env_key:
-        return env_key, "environment"
-
-    # 2. Check Streamlit secrets
-    try:
-        if secret_key in st.secrets:
-            return st.secrets[secret_key], "secrets"
-    except Exception:
-        pass  # secrets.toml doesn't exist or key not found
-
-    # 3. Check session state (persists during browser session)
     if session_key in st.session_state and st.session_state[session_key]:
         return st.session_state[session_key], "session"
 
     return None, "none"
+
+
+def store_api_key(provider: str, key: str) -> tuple[bool, str]:
+    """
+    Store an API key securely.
+    
+    Args:
+        provider: UI provider name (openai, claude, gemini)
+        key: The API key to store
+        
+    Returns:
+        Tuple of (success, message)
+    """
+    provider_map = {
+        "openai": "openai",
+        "claude": "anthropic",
+        "gemini": "google"
+    }
+    
+    cred_provider = provider_map.get(provider, provider)
+    cred_mgr = get_credential_mgr()
+    
+    if cred_mgr:
+        success, result = cred_mgr.store_key(cred_provider, key)
+        if success:
+            return True, f"Saved to {result}"
+        return False, result
+    
+    # Fallback to session state
+    session_key = f"{provider}_api_key"
+    st.session_state[session_key] = key
+    return True, "session (temporary)"
+
+
+def delete_api_key(provider: str) -> tuple[bool, str]:
+    """
+    Delete a stored API key.
+    
+    Args:
+        provider: UI provider name (openai, claude, gemini)
+        
+    Returns:
+        Tuple of (success, message)
+    """
+    provider_map = {
+        "openai": "openai",
+        "claude": "anthropic",
+        "gemini": "google"
+    }
+    
+    cred_provider = provider_map.get(provider, provider)
+    cred_mgr = get_credential_mgr()
+    
+    deleted_from = []
+    
+    if cred_mgr:
+        success, msg = cred_mgr.delete_key(cred_provider)
+        if success:
+            deleted_from.append(msg)
+    
+    # Also clear session state
+    session_key = f"{provider}_api_key"
+    if session_key in st.session_state:
+        del st.session_state[session_key]
+        deleted_from.append("session")
+    
+    if deleted_from:
+        return True, f"Deleted from: {', '.join(deleted_from)}"
+    return False, "No key found to delete"
 
 
 @dataclass
@@ -200,6 +318,9 @@ class SidebarConfig:
 
     # Loaded filings
     loaded_filings: List[LoadedFiling] = field(default_factory=list)
+
+    # Active project
+    active_project_id: Optional[str] = None
 
     def is_configured(self) -> bool:
         """Check if minimum configuration is provided."""
@@ -433,40 +554,85 @@ def render_sidebar() -> SidebarConfig:
             model_options = ["gpt-5.2", "gpt-4.1", "gpt-5-mini"]
             model_format = lambda x: x
 
-        # Show key status
+        # Show key status based on source
         if key_source == "environment":
             st.success(f"✓ Using {env_var_name} from environment")
             config.api_key = existing_key
         elif key_source == "secrets":
             st.success(f"✓ Using API key from secrets.toml")
             config.api_key = existing_key
-        elif key_source == "session":
-            st.info("✓ Using saved API key (session)")
+        elif key_source in ("keyring", "encrypted_file"):
+            # Securely stored key
+            storage_name = "system keychain" if key_source == "keyring" else "secure storage"
+            st.success(f"✓ Key saved in {storage_name}")
             config.api_key = existing_key
-            # Show option to clear
-            if st.button("Clear saved key", key=f"clear_{config.llm_provider}"):
+            
+            # Show preview and delete option
+            cred_mgr = get_credential_mgr()
+            if cred_mgr:
+                key_preview = f"{existing_key[:4]}...{existing_key[-4:]}" if len(existing_key) > 8 else "****"
+                st.caption(f"Key: {key_preview}")
+            
+            if st.button("🗑️ Delete saved key", key=f"delete_{config.llm_provider}"):
+                success, msg = delete_api_key(config.llm_provider)
+                if success:
+                    st.success(f"Key deleted")
+                    st.rerun()
+                else:
+                    st.error(f"Failed to delete: {msg}")
+        elif key_source == "session":
+            st.info("✓ Using key (session only - will be lost on refresh)")
+            config.api_key = existing_key
+            st.caption("💡 Enter key below and click Save to persist")
+            
+            if st.button("Clear session key", key=f"clear_{config.llm_provider}"):
                 del st.session_state[session_key]
                 st.rerun()
         else:
             # No key found - show input
-            api_key_input = st.text_input(
-                f"{provider_name} API Key",
-                type="password",
-                help=f"Get from {help_url}"
-            )
-
-            # Remember checkbox
-            remember_key = st.checkbox(
-                "Remember for this session",
-                value=False,
-                help="Saves key in browser session (cleared when you close the tab)",
-                key=f"remember_{config.llm_provider}"
-            )
-
-            if api_key_input:
-                config.api_key = api_key_input
-                if remember_key:
-                    st.session_state[session_key] = api_key_input
+            st.warning("⚠️ No API key configured")
+        
+        # Always show input for adding/updating key (except when from env/secrets)
+        if key_source not in ("environment", "secrets"):
+            with st.expander("Configure API Key" if existing_key else "Enter API Key", expanded=not existing_key):
+                api_key_input = st.text_input(
+                    f"{provider_name} API Key",
+                    type="password",
+                    help=f"Get from {help_url}",
+                    key=f"key_input_{config.llm_provider}"
+                )
+                
+                col_save, col_test = st.columns(2)
+                
+                with col_save:
+                    if st.button("💾 Save Key", key=f"save_{config.llm_provider}", 
+                                disabled=not api_key_input, use_container_width=True):
+                        if api_key_input:
+                            success, msg = store_api_key(config.llm_provider, api_key_input)
+                            if success:
+                                st.success(f"✓ Saved to {msg}")
+                                st.rerun()
+                            else:
+                                st.error(f"Failed: {msg}")
+                
+                with col_test:
+                    if st.button("🧪 Test Key", key=f"test_{config.llm_provider}",
+                                disabled=not api_key_input, use_container_width=True):
+                        if api_key_input:
+                            cred_mgr = get_credential_mgr()
+                            if cred_mgr:
+                                # Map provider name
+                                provider_map = {"openai": "openai", "claude": "anthropic", "gemini": "google"}
+                                with st.spinner("Testing..."):
+                                    success, msg = cred_mgr.test_key(provider_map.get(config.llm_provider), api_key_input)
+                                if success:
+                                    st.success(f"✓ {msg}")
+                                else:
+                                    st.error(f"✗ {msg}")
+                
+                # Use entered key for this session even if not saved
+                if api_key_input:
+                    config.api_key = api_key_input
 
         # Model selection
         config.model = st.selectbox(
@@ -515,6 +681,19 @@ def render_sidebar() -> SidebarConfig:
                 st.caption(f"✓ {ticker_input} loaded")
             else:
                 st.caption(f"⚠ Click Load to fetch {ticker_input}")
+
+        st.divider()
+
+        # Projects Section
+        try:
+            from ui.projects_panel import render_projects_panel
+            active_project_id = render_projects_panel(current_ticker=ticker_input)
+            if active_project_id:
+                config.active_project_id = active_project_id
+        except ImportError as e:
+            logger.debug(f"Projects panel not available: {e}")
+        except Exception as e:
+            logger.error(f"Error rendering projects panel: {e}")
 
         st.divider()
 
@@ -702,24 +881,30 @@ def render_sidebar() -> SidebarConfig:
 
             ### API Key Configuration
 
-            Three ways to configure your API key (most to least secure):
+            Your API keys can be stored securely:
 
-            **1. Environment Variable** (recommended)
+            **1. Environment Variable** (best for servers)
             ```bash
             export OPENAI_API_KEY="sk-..."
-            # or
             export ANTHROPIC_API_KEY="sk-ant-..."
+            export GOOGLE_API_KEY="..."
             ```
 
-            **2. Streamlit Secrets**
+            **2. Streamlit Secrets** (good for development)
             Create `.streamlit/secrets.toml`:
             ```toml
             openai_api_key = "sk-..."
             anthropic_api_key = "sk-ant-..."
+            google_api_key = "..."
             ```
 
-            **3. Session Storage**
-            Enter key above and check "Remember for this session"
+            **3. Secure Storage** (recommended for desktop)
+            Click **Save Key** above to store in:
+            - macOS: Keychain
+            - Windows: Credential Manager
+            - Linux: Secret Service
+
+            Keys persist across browser refreshes!
 
             ### Example Questions
 
