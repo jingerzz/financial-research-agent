@@ -4,13 +4,15 @@ A comprehensive financial research tool combining SEC filing analysis, stock pri
 
 ## Features
 
+- **Projects**: Organize research into projects with SEC filings and uploaded documents (similar to Claude Desktop)
 - **SEC Filing Analysis**: Extract and analyze information from 10-K, 10-Q, 8-K, and other SEC filings
+- **Document Upload**: Drag-and-drop PDFs, Word docs, spreadsheets, and more into projects
 - **Price Analysis**: Interactive charts, identify significant price events (all-time highs/lows, rallies, drawdowns)
 - **News Search**: Search for relevant news articles using multiple backends (DuckDuckGo free search, Anthropic Claude, NewsAPI, cached historical data)
 - **Conversational AI**: Ask questions about companies, financials, and market events using Claude, OpenAI, or Google Gemini
-- **RAG (Retrieval-Augmented Generation)**: Semantic search over SEC filings using ChromaDB and sentence-transformers
+- **RAG (Retrieval-Augmented Generation)**: Semantic search over SEC filings and uploaded documents using ChromaDB
+- **Secure API Key Storage**: Keys persist across browser sessions using OS keychain or encrypted local storage
 - **Pre-built Workflows**: Automated analysis workflows for financial health, risk analysis, and competitive comparison
-- **Data Upload**: Upload your own price history CSV/Excel files for analysis
 
 ## Installation
 
@@ -45,9 +47,10 @@ The app will open in your browser at `http://localhost:8501`.
 
 ### Getting Started
 
-1. **Configure API Key**: In the sidebar, select your LLM provider (Anthropic, OpenAI, or Google Gemini) and enter your API key
+1. **Configure API Key**: In the sidebar, select your LLM provider (Anthropic, OpenAI, or Google Gemini) and enter your API key. Click **Save Key** to persist it.
 2. **Enter Ticker**: Type a stock ticker symbol (e.g., AAPL, MSFT, GOOGL)
-3. **Use the Interface**:
+3. **Create or Select a Project**: Projects help organize your research. Add SEC filings and upload documents.
+4. **Use the Interface**:
    - **Research Chat**: Ask questions about companies and financials
    - **Workflows**: Run pre-built analysis workflows
    - **Price Analysis**: View charts and analyze price history
@@ -70,19 +73,23 @@ financial-research-agent/
 ├── core/
 │   ├── agent.py          # Main agent orchestrator
 │   ├── conversation.py   # Conversation management
-│   ├── llm_provider.py  # Multi-LLM provider abstraction
+│   ├── credential_manager.py # Secure API key storage
+│   ├── llm_provider.py   # Multi-LLM provider abstraction
 │   └── tools.py          # Tool definitions and executor
 ├── data/
-│   ├── sec_edgar.py     # SEC EDGAR filing retrieval
+│   ├── sec_edgar.py      # SEC EDGAR filing retrieval
 │   ├── price_analyzer.py # Stock price analysis
-│   ├── news_search.py   # News search backends
-│   ├── rag_manager.py   # RAG vector storage with ChromaDB
-│   └── chunking.py      # SEC filing chunking for RAG
+│   ├── news_search.py    # News search backends
+│   ├── rag_manager.py    # RAG vector storage with ChromaDB
+│   ├── chunking.py       # SEC filing chunking for RAG
+│   ├── project_manager.py # Project CRUD and document management
+│   └── document_processor.py # Text extraction from uploaded files
 ├── ui/
 │   ├── chat_interface.py      # Chat UI component
 │   ├── price_analysis_tab.py  # Price analysis UI
 │   ├── workflows_tab.py       # Workflows UI
-│   └── sidebar.py             # Sidebar configuration
+│   ├── sidebar.py             # Sidebar configuration
+│   └── projects_panel.py      # Projects management UI
 └── workflows/
     ├── base.py                # Base workflow class
     ├── financial_health.py    # Financial health analysis
@@ -101,6 +108,23 @@ financial-research-agent/
 - Note: DuckDuckGo search works without any API key
 
 ## Features in Detail
+
+### Projects
+- Create named projects to organize research (e.g., "AAPL Deep Dive", "Tech Sector Analysis")
+- Add SEC filings from EDGAR and uploaded documents to projects
+- Drag-and-drop file upload for PDFs, Word documents, spreadsheets, and more
+- All documents are indexed for semantic search
+- Auto-create default project when loading a ticker
+- Projects persist across sessions
+
+### Secure API Key Storage
+- Keys persist across browser refreshes (no more re-entering!)
+- Storage priority: Environment vars > secrets.toml > OS Keychain > Encrypted file
+- macOS: Uses Keychain
+- Windows: Uses Credential Manager
+- Linux: Uses Secret Service (GNOME Keyring, KWallet)
+- Fallback: AES-256 encrypted local file
+- Multi-user support (keys stored per-OS-user)
 
 ### SEC Filing Analysis
 - Automatic retrieval of 10-K, 10-Q, 8-K, and other SEC filings
