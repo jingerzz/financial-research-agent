@@ -71,22 +71,44 @@ def index_document_for_rag(
     Returns:
         Number of chunks indexed
     """
+    logger.info(f"=== INDEXING DOCUMENT FOR RAG: {filename} ===")
+    logger.info(f"  project_id={project_id}, document_id={document_id}, file_type={file_type}")
+    logger.info(f"  file_content size: {len(file_content)} bytes")
+    
     doc_processor = get_document_processor()
     rag_manager = get_rag_manager()
     
-    if not doc_processor or not rag_manager:
-        logger.warning("Document processor or RAG manager not available")
+    if not doc_processor:
+        logger.error("❌ Document processor not available!")
         return 0
+    
+    if not rag_manager:
+        logger.error("❌ RAG manager not available! Documents will not be searchable.")
+        # Try to get config to see if RAG is enabled
+        try:
+            from config import get_config
+            config = get_config()
+            logger.error(f"  RAG enabled in config: {config.rag.enabled}")
+        except Exception as e:
+            logger.error(f"  Could not check config: {e}")
+        return 0
+    
+    logger.info(f"  doc_processor: OK, rag_manager: OK")
     
     try:
         # Extract text from document
+        logger.info(f"  Extracting text from {filename}...")
         processed = doc_processor.process(file_content, filename)
         
         if not processed.text:
-            logger.warning(f"No text extracted from {filename}")
+            logger.warning(f"  ❌ No text extracted from {filename}")
             return 0
         
+        logger.info(f"  ✅ Extracted {len(processed.text)} chars from {filename}")
+        logger.info(f"  First 200 chars: {processed.text[:200]}...")
+        
         # Index into RAG
+        logger.info(f"  Indexing into RAG with project_id={project_id}...")
         chunk_count = rag_manager.index_document(
             content=processed.text,
             project_id=project_id,
@@ -95,16 +117,24 @@ def index_document_for_rag(
             file_type=file_type
         )
         
+        logger.info(f"  ✅ Indexed {chunk_count} chunks for {filename}")
+        
+        # Verify indexing by checking stats
+        stats = rag_manager.get_stats()
+        logger.info(f"  RAG stats after indexing: {stats}")
+        
         # Update project metadata
         project_mgr = get_project_manager()
         if project_mgr and chunk_count > 0:
             project_mgr.mark_document_indexed(project_id, document_id, chunk_count)
+            logger.info(f"  ✅ Marked document as indexed in project metadata")
         
-        logger.info(f"Indexed {chunk_count} chunks for {filename}")
         return chunk_count
         
     except Exception as e:
-        logger.error(f"Error indexing document {filename}: {e}")
+        logger.error(f"❌ Error indexing document {filename}: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return 0
 
 
@@ -273,57 +303,286 @@ def render_project_details(project, project_mgr, current_ticker: str):
     # File upload section
     st.markdown("**Add Documents**")
     
-    uploaded_files = st.file_uploader(
-        "Drag & drop files",
-        type=["pdf", "docx", "doc", "txt", "md", "csv", "xlsx", "xls", "html"],
-        accept_multiple_files=True,
-        key=f"upload_{project.id}",
-        help="Supported: PDF, Word, Text, Markdown, CSV, Excel, HTML"
-    )
+    # Initialize processing tracking
+    processing_key = f"processing_files_{project.id}"
+    if processing_key not in st.session_state:
+        st.session_state[processing_key] = set()
     
+    # Check for pending uploads from previous render
+    pending_key = f"pending_uploads_{project.id}"
+    if pending_key in st.session_state and st.session_state[pending_key]:
+        uploaded_files = st.session_state[pending_key]
+        del st.session_state[pending_key]  # Clear pending
+    else:
+        uploaded_files = st.file_uploader(
+            "Drag & drop files",
+            type=["pdf", "docx", "doc", "txt", "md", "csv", "xlsx", "xls", "html"],
+            accept_multiple_files=True,
+            key=f"upload_{project.id}",
+            help="Supported: PDF, Word, Text, Markdown, CSV, Excel, HTML"
+        )
+    
+    # Process uploaded files
     if uploaded_files:
+        logger.info(f"=== FILE UPLOAD: {len(uploaded_files)} file(s) received ===")
+        for uf in uploaded_files:
+            logger.info(f"  - {uf.name} ({uf.size} bytes)")
+        
         doc_processor = get_document_processor()
+        if not doc_processor:
+            st.error("❌ Document processor not available. Check if dependencies are installed.")
+            logger.error("Document processor is None!")
+        else:
+            logger.info(f"Document processor available, dependencies: {doc_processor._dependencies}")
         
-        for uploaded_file in uploaded_files:
-            # Check if already processing
-            if f"processing_{uploaded_file.name}" in st.session_state:
-                continue
-            
-            if doc_processor and doc_processor.is_supported(uploaded_file.name):
-                file_content = uploaded_file.read()
-                file_type = doc_processor.get_file_type(uploaded_file.name)
+        processed_count = 0
+        failed_count = 0
+        processed_names = []
+        failed_names = []
+        
+        with st.spinner("Processing files..."):
+            for uploaded_file in uploaded_files:
+                # Create unique key for this file (name + size + timestamp)
+                file_key = f"{uploaded_file.name}_{uploaded_file.size}"
+                logger.info(f"Processing file: {uploaded_file.name}, key={file_key}")
                 
-                # Add to project
-                doc = project_mgr.add_document(
-                    project.id,
-                    file_content,
-                    uploaded_file.name,
-                    file_type
-                )
+                # Check if already processed in this session
+                if file_key in st.session_state[processing_key]:
+                    logger.info(f"  -> Already processed in this session, skipping")
+                    continue
                 
-                if doc:
-                    st.success(f"Added: {uploaded_file.name}")
+                # Mark as processing
+                st.session_state[processing_key].add(file_key)
+                
+                try:
+                    # Check if file already exists in project (by name and size)
+                    already_exists = any(
+                        doc.original_name == uploaded_file.name and 
+                        doc.size_bytes == uploaded_file.size
+                        for doc in project.documents
+                    )
                     
-                    # Index document for RAG
-                    try:
-                        index_document_for_rag(project.id, doc.id, file_content, uploaded_file.name, file_type)
-                    except Exception as e:
-                        logger.warning(f"Failed to index document for RAG: {e}")
-                else:
-                    st.error(f"Failed to add: {uploaded_file.name}")
-            else:
-                st.error(f"Unsupported file type: {uploaded_file.name}")
+                    if already_exists:
+                        logger.info(f"  -> Document {uploaded_file.name} already exists in project, skipping")
+                        st.info(f"⏭️ Skipped {uploaded_file.name} (already in project)")
+                        # Don't mark as processed so user knows it was skipped
+                        st.session_state[processing_key].discard(file_key)
+                        continue
+                    
+                    if doc_processor and doc_processor.is_supported(uploaded_file.name):
+                        # Read file content (only once)
+                        file_content = uploaded_file.read()
+                        logger.info(f"  -> Read {len(file_content)} bytes from {uploaded_file.name}")
+                        
+                        if len(file_content) == 0:
+                            logger.error(f"  -> File content is empty!")
+                            st.error(f"❌ {uploaded_file.name} is empty or could not be read")
+                            st.session_state[processing_key].discard(file_key)
+                            failed_count += 1
+                            failed_names.append(uploaded_file.name)
+                            continue
+                        
+                        file_type = doc_processor.get_file_type(uploaded_file.name)
+                        logger.info(f"  -> File type: {file_type}")
+                        
+                        # Add to project
+                        doc = project_mgr.add_document(
+                            project.id,
+                            file_content,
+                            uploaded_file.name,
+                            file_type
+                        )
+                        
+                        if doc:
+                            processed_count += 1
+                            processed_names.append(uploaded_file.name)
+                            logger.info(f"  -> ✅ Added document: {uploaded_file.name} to project {project.id}, doc_id={doc.id}")
+                            st.toast(f"📄 Added {uploaded_file.name}", icon="✅")
+                            
+                            # Index document for RAG
+                            try:
+                                chunks_indexed = index_document_for_rag(project.id, doc.id, file_content, uploaded_file.name, file_type)
+                                logger.info(f"  -> ✅ Indexed {chunks_indexed} chunks for RAG")
+                                if chunks_indexed > 0:
+                                    st.toast(f"🔍 Indexed {chunks_indexed} chunks for {uploaded_file.name}", icon="✅")
+                                else:
+                                    st.warning(f"⚠️ No text extracted from {uploaded_file.name}")
+                            except Exception as e:
+                                logger.warning(f"  -> ⚠️ Failed to index document for RAG: {e}")
+                                import traceback
+                                logger.warning(traceback.format_exc())
+                                st.warning(f"⚠️ {uploaded_file.name} added but not indexed for search")
+                        else:
+                            failed_count += 1
+                            failed_names.append(uploaded_file.name)
+                            logger.error(f"  -> ❌ Failed to add document: {uploaded_file.name}")
+                            st.error(f"❌ Failed to add {uploaded_file.name}")
+                            # Remove from processing set so it can be retried
+                            st.session_state[processing_key].discard(file_key)
+                    else:
+                        failed_count += 1
+                        failed_names.append(uploaded_file.name)
+                        if not doc_processor:
+                            logger.warning(f"  -> ❌ No document processor available")
+                            st.error(f"❌ Document processor not available")
+                        else:
+                            logger.warning(f"  -> ❌ Unsupported file type: {uploaded_file.name}")
+                            st.error(f"❌ Unsupported file type: {uploaded_file.name}")
+                        # Remove from processing set
+                        st.session_state[processing_key].discard(file_key)
+                except Exception as e:
+                    failed_count += 1
+                    failed_names.append(uploaded_file.name)
+                    logger.error(f"  -> ❌ Error processing {uploaded_file.name}: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+                    st.error(f"❌ Error processing {uploaded_file.name}: {str(e)}")
+                    # Remove from processing set so it can be retried
+                    st.session_state[processing_key].discard(file_key)
         
-        st.rerun()
+        # Show results
+        if processed_count > 0:
+            st.success(f"✅ Added {processed_count} file(s): {', '.join(processed_names[:3])}{'...' if len(processed_names) > 3 else ''}")
+        if failed_count > 0:
+            st.error(f"❌ Failed to process {failed_count} file(s): {', '.join(failed_names[:3])}{'...' if len(failed_names) > 3 else ''}")
+        
+        # Rerun to refresh UI and clear file uploader
+        if processed_count > 0 or failed_count > 0:
+            st.rerun()
     
     # Show project contents
     st.markdown("**Project Contents**")
+    
+    # Add Re-index button if there are documents
+    if project.documents:
+        not_indexed = [d for d in project.documents if not d.indexed]
+        indexed = [d for d in project.documents if d.indexed]
+        st.caption(f"📄 {len(indexed)} indexed, {len(not_indexed)} not indexed")
+        
+        if st.button("🔄 Re-index All Documents for Search", 
+                    key=f"reindex_docs_{project.id}",
+                    use_container_width=True,
+                    help="Re-index all documents to make them searchable in Research Chat"):
+            with st.spinner("Re-indexing documents..."):
+                reindex_count = 0
+                for doc in project.documents:
+                    # Get document content from disk
+                    doc_path = project_mgr._get_project_documents_dir(project.id) / doc.filename
+                    if doc_path.exists():
+                        try:
+                            file_content = doc_path.read_bytes()
+                            chunks = index_document_for_rag(
+                                project.id, doc.id, file_content, 
+                                doc.original_name, doc.file_type
+                            )
+                            if chunks > 0:
+                                reindex_count += 1
+                                logger.info(f"Re-indexed {doc.original_name}: {chunks} chunks")
+                        except Exception as e:
+                            logger.error(f"Failed to re-index {doc.original_name}: {e}")
+                            st.error(f"Failed to re-index {doc.original_name}")
+                    else:
+                        logger.warning(f"Document file not found: {doc_path}")
+                
+                if reindex_count > 0:
+                    st.success(f"✅ Re-indexed {reindex_count} document(s)")
+                    # Check RAG stats
+                    rag_mgr = get_rag_manager()
+                    if rag_mgr:
+                        stats = rag_mgr.get_stats()
+                        st.info(f"RAG now has {stats.get('document_chunks', 0)} document chunks")
+                else:
+                    st.warning("No documents were re-indexed")
+                st.rerun()
     
     total_items = len(project.documents) + len(project.sec_filings)
     
     if total_items == 0:
         st.caption("No documents yet. Upload files or add SEC filings.")
     else:
+        # Bulk delete buttons
+        if project.documents or project.sec_filings:
+            # Check for confirmation state
+            confirm_key = f"confirm_delete_all_docs_{project.id}"
+            if confirm_key in st.session_state and st.session_state[confirm_key]:
+                st.warning(f"⚠️ Delete all {len(project.documents)} document(s)?")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Yes, Delete All Documents", key=f"confirm_yes_docs_{project.id}", 
+                                use_container_width=True, type="primary"):
+                        deleted_count = 0
+                        for doc in project.documents[:]:  # Copy list to avoid modification during iteration
+                            if project_mgr.remove_document(project.id, doc.id):
+                                deleted_count += 1
+                        st.session_state[confirm_key] = False
+                        st.success(f"✅ Deleted {deleted_count} document(s)")
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Cancel", key=f"confirm_no_docs_{project.id}", 
+                                use_container_width=True):
+                        st.session_state[confirm_key] = False
+                        st.rerun()
+            else:
+                # Show buttons only for items that exist
+                if project.documents and project.sec_filings:
+                    # Both exist - show two buttons side by side
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🗑️ Delete All Documents", 
+                                   key=f"delete_all_docs_{project.id}",
+                                   use_container_width=True,
+                                   type="secondary"):
+                            st.session_state[confirm_key] = True
+                            st.rerun()
+                    with col2:
+                        confirm_filings_key = f"confirm_delete_all_filings_{project.id}"
+                        if st.button("🗑️ Delete All SEC Filings",
+                                     key=f"delete_all_filings_{project.id}",
+                                     use_container_width=True,
+                                     type="secondary"):
+                            st.session_state[confirm_filings_key] = True
+                            st.rerun()
+                elif project.documents:
+                    # Only documents exist
+                    if st.button("🗑️ Delete All Documents", 
+                               key=f"delete_all_docs_{project.id}",
+                               use_container_width=True,
+                               type="secondary"):
+                        st.session_state[confirm_key] = True
+                        st.rerun()
+                elif project.sec_filings:
+                    # Only filings exist
+                    confirm_filings_key = f"confirm_delete_all_filings_{project.id}"
+                    if st.button("🗑️ Delete All SEC Filings",
+                                 key=f"delete_all_filings_{project.id}",
+                                 use_container_width=True,
+                                 type="secondary"):
+                        st.session_state[confirm_filings_key] = True
+                        st.rerun()
+            
+            # Handle filings confirmation
+            confirm_filings_key = f"confirm_delete_all_filings_{project.id}"
+            if confirm_filings_key in st.session_state and st.session_state[confirm_filings_key]:
+                st.warning(f"⚠️ Delete all {len(project.sec_filings)} SEC filing(s)?")
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("✅ Yes, Delete All SEC Filings", key=f"confirm_yes_filings_{project.id}", 
+                                use_container_width=True, type="primary"):
+                        deleted_count = 0
+                        for filing in project.sec_filings[:]:
+                            if project_mgr.remove_sec_filing(project.id, filing.accession_number):
+                                deleted_count += 1
+                        st.session_state[confirm_filings_key] = False
+                        st.success(f"✅ Deleted {deleted_count} SEC filing(s)")
+                        st.rerun()
+                with col2:
+                    if st.button("❌ Cancel", key=f"confirm_no_filings_{project.id}", 
+                                use_container_width=True):
+                        st.session_state[confirm_filings_key] = False
+                        st.rerun()
+            
+            st.divider()
+        
         # SEC Filings
         if project.sec_filings:
             st.markdown("*SEC Filings:*")
@@ -392,6 +651,57 @@ def get_active_project():
         return None
     
     return project_mgr.get_project(project_id)
+
+
+def get_full_document_context(project, threshold_kb: int = 100) -> tuple[str, list[str]]:
+    """
+    Get full document content for documents under the size threshold.
+    
+    Args:
+        project: The project containing documents
+        threshold_kb: Size threshold in KB. Documents larger than this use RAG.
+        
+    Returns:
+        Tuple of (context_string, list_of_included_doc_names)
+    """
+    if not project or not project.documents:
+        return "", []
+    
+    project_mgr = get_project_manager()
+    doc_processor = get_document_processor()
+    
+    if not project_mgr or not doc_processor:
+        return "", []
+    
+    threshold_bytes = threshold_kb * 1024
+    context_parts = []
+    included_docs = []
+    
+    for doc in project.documents:
+        # Check if document is under threshold
+        if doc.size_bytes <= threshold_bytes:
+            # Get document content from disk
+            doc_path = project_mgr._get_project_documents_dir(project.id) / doc.filename
+            if doc_path.exists():
+                try:
+                    file_content = doc_path.read_bytes()
+                    # Extract text
+                    processed = doc_processor.process(file_content, doc.original_name)
+                    
+                    if processed.text:
+                        context_parts.append(f"\n{'='*60}")
+                        context_parts.append(f"DOCUMENT: {doc.original_name}")
+                        context_parts.append(f"Size: {doc.size_bytes / 1024:.1f} KB")
+                        context_parts.append(f"{'='*60}\n")
+                        context_parts.append(processed.text)
+                        included_docs.append(doc.original_name)
+                        logger.info(f"Included full document: {doc.original_name} ({len(processed.text)} chars)")
+                except Exception as e:
+                    logger.error(f"Error reading document {doc.original_name}: {e}")
+        else:
+            logger.info(f"Document {doc.original_name} ({doc.size_bytes / 1024:.1f} KB) exceeds threshold, will use RAG")
+    
+    return "\n".join(context_parts), included_docs
 
 
 def add_filing_to_active_project(

@@ -121,6 +121,17 @@ st.markdown("""
         border-color: #e0e0e0;
     }
     
+    /* Sidebar buttons - smaller font for better fit */
+    [data-testid="stSidebar"] button {
+        font-size: 0.75rem !important;
+        padding: 0.4rem 0.8rem !important;
+    }
+    
+    /* Sidebar button text */
+    [data-testid="stSidebar"] button span {
+        font-size: 0.75rem !important;
+    }
+    
     /* Preserve status message colors (success, warning, info, error) */
     [data-testid="stSidebar"] .stSuccess,
     [data-testid="stSidebar"] .stWarning,
@@ -140,9 +151,14 @@ st.markdown("""
 
     /* Chat message content - improved readability (theme-aware) */
     .stChatMessage [data-testid="stMarkdownContainer"] {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-        font-size: 1rem;
-        line-height: 1.6;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif !important;
+        font-size: 1rem !important;
+        line-height: 1.7 !important;
+        letter-spacing: 0.01em;
+    }
+    
+    .stChatMessage [data-testid="stMarkdownContainer"] * {
+        font-family: inherit !important;
     }
 
     /* Chat message paragraphs */
@@ -235,13 +251,26 @@ st.markdown("""
         background-color: rgba(128, 128, 128, 0.05);
     }
 
-    /* Bold and emphasis - inherit color from theme */
+    /* Bold and emphasis - inherit color and SIZE from theme */
     .stChatMessage [data-testid="stMarkdownContainer"] strong {
         font-weight: 600;
+        font-size: inherit !important;
     }
 
     .stChatMessage [data-testid="stMarkdownContainer"] em {
         font-style: italic;
+        font-size: inherit !important;
+    }
+    
+    /* Ensure all text elements have consistent sizing */
+    .stChatMessage [data-testid="stMarkdownContainer"] span {
+        font-size: inherit !important;
+    }
+    
+    /* Fix for ** markdown being rendered as large text */
+    .stChatMessage [data-testid="stMarkdownContainer"] b {
+        font-weight: 600;
+        font-size: inherit !important;
     }
 
     /* Links in chat */

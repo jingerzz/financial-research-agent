@@ -83,40 +83,100 @@ def render_chat_interface(
     )
 
     if prompt and agent:
-        # Inject loaded filings context into agent using RAG or full context
+        # Inject loaded filings and project documents context into agent using RAG or full context
         try:
             config = get_config()
             loaded_count = len(st.session_state.get("loaded_filings", []))
-
-            if loaded_count > 0 and config.rag.enabled:
-                # Use RAG to retrieve relevant chunks based on user query
-                filings_context, chunk_count = get_rag_context(prompt)
-                if filings_context:
-                    agent.set_context(filings_context)
-                    logger.info(f"RAG retrieved {chunk_count} chunks ({len(filings_context)} chars) for query")
-                    st.toast(f"Retrieved {chunk_count} relevant excerpts from {loaded_count} filing(s)", icon="🔍")
-                else:
-                    # RAG found nothing, fall back to full context (may exceed limits)
-                    filings_context = get_loaded_filings_context()
-                    if filings_context:
-                        agent.set_context(filings_context)
-                        logger.info(f"RAG found no matches, using full context: {len(filings_context)} chars")
-                        st.toast(f"Using full context from {loaded_count} filing(s)", icon="📄")
-                    else:
-                        agent.set_context(None)
+            
+            # Set custom instructions if provided
+            custom_prompt = st.session_state.get("custom_system_prompt", "")
+            if custom_prompt:
+                agent.set_custom_instructions(custom_prompt)
+                logger.info(f"Custom instructions set: {len(custom_prompt)} chars")
             else:
-                # RAG disabled or no filings - use full context
+                agent.set_custom_instructions(None)
+            
+            # Check if there's an active project with documents
+            active_project_id = st.session_state.get("active_project_id")
+            has_project_documents = False
+            active_project = None
+            if active_project_id:
+                from ui.projects_panel import get_active_project, get_full_document_context
+                active_project = get_active_project()
+                if active_project and len(active_project.documents) > 0:
+                    has_project_documents = True
+                    doc_names = [d.original_name for d in active_project.documents]
+                    logger.info(f"Active project '{active_project.name}' has {len(active_project.documents)} document(s): {doc_names}")
+
+            # HYBRID MODE: Use full document for small files, RAG for large files
+            context_parts = []
+            full_doc_names = []
+            rag_source_info = []
+            
+            # Step 1: Get full document content for small documents
+            if has_project_documents and config.rag.full_doc_threshold_kb > 0:
+                full_doc_context, full_doc_names = get_full_document_context(
+                    active_project, 
+                    threshold_kb=config.rag.full_doc_threshold_kb
+                )
+                if full_doc_context:
+                    context_parts.append(full_doc_context)
+                    logger.info(f"Included {len(full_doc_names)} full document(s): {full_doc_names}")
+            
+            # Step 2: Use RAG for large documents and filings
+            use_rag_for_remaining = config.rag.enabled and (
+                loaded_count > 0 or 
+                (has_project_documents and len(full_doc_names) < len(active_project.documents))
+            )
+            
+            if use_rag_for_remaining:
+                # Log RAG stats for debugging
+                from ui.sidebar import get_rag_manager
+                rag_mgr = get_rag_manager()
+                
+                # Use RAG to retrieve relevant chunks
+                rag_context, chunk_count = get_rag_context(prompt)
+                if rag_context:
+                    context_parts.append(rag_context)
+                    if loaded_count > 0:
+                        rag_source_info.append(f"{loaded_count} filing(s)")
+                    # Count documents that weren't included in full
+                    large_docs = len(active_project.documents) - len(full_doc_names) if active_project else 0
+                    if large_docs > 0:
+                        rag_source_info.append(f"{large_docs} large document(s)")
+                    logger.info(f"RAG retrieved {chunk_count} chunks for: {rag_source_info}")
+            
+            # Step 3: Fall back to full filing context if no RAG results
+            if not context_parts and loaded_count > 0:
                 filings_context = get_loaded_filings_context()
                 if filings_context:
-                    agent.set_context(filings_context)
-                    logger.info(f"Injected {len(filings_context)} chars of filing context from {loaded_count} filing(s)")
-                    st.toast(f"Using {loaded_count} loaded filing(s) as context", icon="📄")
-                else:
-                    agent.set_context(None)
-                    if loaded_count > 0:
-                        logger.warning(f"Have {loaded_count} filings but no context generated")
+                    context_parts.append(filings_context)
+                    logger.info(f"Using full filing context: {len(filings_context)} chars")
+            
+            # Combine all context and set on agent
+            if context_parts:
+                combined_context = "\n\n".join(context_parts)
+                agent.set_context(combined_context)
+                
+                # Show user-friendly toast
+                source_parts = []
+                if full_doc_names:
+                    source_parts.append(f"{len(full_doc_names)} full doc(s)")
+                if rag_source_info:
+                    source_parts.append(f"RAG from {', '.join(rag_source_info)}")
+                
+                if source_parts:
+                    st.toast(f"Using: {', '.join(source_parts)}", icon="📄")
+                logger.info(f"Total context: {len(combined_context)} chars")
+            else:
+                agent.set_context(None)
+                if has_project_documents:
+                    st.toast("⚠️ Could not load document content. Try re-uploading.", icon="⚠️")
+                    logger.warning("Have project documents but could not generate context")
         except Exception as e:
             logger.error(f"Error setting context: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
         # Add user message
         user_msg = {

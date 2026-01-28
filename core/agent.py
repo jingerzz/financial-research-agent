@@ -121,6 +121,17 @@ class FinancialResearchAgent:
 
         # Additional context (e.g., loaded SEC filings)
         self._additional_context: Optional[str] = None
+        
+        # Custom user instructions
+        self._custom_instructions: Optional[str] = None
+
+    def set_custom_instructions(self, instructions: Optional[str]) -> None:
+        """Set custom user instructions to include in the system prompt."""
+        self._custom_instructions = instructions
+    
+    def get_custom_instructions(self) -> Optional[str]:
+        """Get the current custom instructions."""
+        return self._custom_instructions
 
     def set_context(self, context: Optional[str]) -> None:
         """Set additional context to include in all requests (e.g., loaded SEC filings)."""
@@ -132,16 +143,37 @@ class FinancialResearchAgent:
 
     def _get_full_system_prompt(self) -> str:
         """Get system prompt with any additional context appended."""
-        if not self._additional_context:
-            return self.system_prompt
+        prompt_parts = [self.system_prompt]
+        
+        # Add custom user instructions if provided
+        if self._custom_instructions:
+            prompt_parts.append(f"""
+## Custom Instructions
 
-        return f"""{self.system_prompt}
+The user has provided the following additional instructions. Please follow these guidelines in your responses:
 
-## Available Filing Excerpts
+{self._custom_instructions}""")
+        
+        # Add document/filing context if provided
+        if self._additional_context:
+            # Check if context includes documents (not just filings)
+            has_documents = "DOCUMENT:" in self._additional_context
+            
+            context_header = "## Available Filing Excerpts"
+            if has_documents:
+                context_header = "## Available Filing Excerpts and Project Documents"
+                context_description = "The following excerpts from SEC filings and uploaded project documents have been retrieved as relevant to the user's query. Use your expertise to analyze this information and answer their questions."
+            else:
+                context_description = "The following excerpts from SEC filings have been retrieved as relevant to the user's query. Use your SEC filing expertise to analyze this information and answer their questions."
 
-The following excerpts from SEC filings have been retrieved as relevant to the user's query. Use your SEC filing expertise to analyze this information and answer their questions.
+            prompt_parts.append(f"""
+{context_header}
 
-{self._additional_context}"""
+{context_description}
+
+{self._additional_context}""")
+
+        return "\n".join(prompt_parts)
 
     def reset_conversation(self) -> None:
         """Clear conversation history."""

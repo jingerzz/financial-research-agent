@@ -110,8 +110,11 @@ class RAGConfig:
 
     # Retrieval settings
     top_k: int = 10  # Number of chunks to retrieve
-    similarity_threshold: float = 0.7  # Minimum similarity score (0-1)
+    similarity_threshold: float = 0.3  # Minimum similarity score (0-1) - lowered to include more results
     max_context_tokens: int = 32000  # Maximum tokens for context
+
+    # Hybrid mode: use full document if smaller than threshold
+    full_doc_threshold_kb: int = 1500  # Use full document if < 1.5MB (0 = always use RAG)
 
     # Storage
     persist_directory: Path = field(default_factory=lambda: CACHE_DIR / "chromadb")

@@ -307,7 +307,7 @@ class RAGManager:
         file_type: str,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
-        skip_if_exists: bool = True
+        skip_if_exists: bool = False  # Changed default to False to ensure re-indexing
     ) -> int:
         """
         Index a project document into ChromaDB.
@@ -325,16 +325,43 @@ class RAGManager:
         Returns:
             Number of chunks indexed
         """
+        logger.info(f"RAGManager.index_document called for {filename}")
+        logger.info(f"  project_id={project_id}, document_id={document_id}")
+        logger.info(f"  content length: {len(content)} chars")
+        
         self._ensure_initialized()
+        logger.info(f"  ChromaDB collection: {self._collection.name}, count: {self._collection.count()}")
 
         doc_key = f"{project_id}:{document_id}"
         
-        if skip_if_exists and self.is_document_indexed(project_id, document_id):
-            logger.info(f"Document {doc_key} already indexed, skipping")
+        # Check if already indexed in memory tracking
+        if skip_if_exists and doc_key in self._indexed_documents:
+            logger.info(f"  Document {doc_key} in memory cache, skipping")
             return 0
+        
+        # Also check ChromaDB directly for existing chunks
+        try:
+            existing = self._collection.get(
+                where={"$and": [
+                    {"project_id": project_id},
+                    {"document_id": document_id}
+                ]},
+                include=[]
+            )
+            if existing and existing.get("ids"):
+                logger.info(f"  Document {doc_key} has {len(existing['ids'])} existing chunks in ChromaDB")
+                if skip_if_exists:
+                    self._indexed_documents.add(doc_key)  # Update memory cache
+                    return len(existing['ids'])
+                else:
+                    # Delete existing chunks to re-index
+                    logger.info(f"  Deleting existing chunks to re-index...")
+                    self._collection.delete(ids=existing['ids'])
+        except Exception as e:
+            logger.warning(f"  Could not check for existing chunks: {e}")
 
         if not content:
-            logger.warning(f"No content for document {doc_key}")
+            logger.warning(f"  No content for document {doc_key}")
             return 0
 
         # Simple chunking for documents
@@ -385,22 +412,31 @@ class RAGManager:
             if start <= 0:
                 start = end
 
+        logger.info(f"  Generated {len(chunks_data)} chunks for document {doc_key}")
+        
         if not chunks_data:
-            logger.warning(f"No chunks generated for document {doc_key}")
+            logger.warning(f"  No chunks generated for document {doc_key}")
             return 0
 
         # Add to collection
         try:
+            logger.info(f"  Adding {len(chunks_data)} chunks to ChromaDB...")
             self._collection.add(
                 ids=[c["id"] for c in chunks_data],
                 documents=[c["content"] for c in chunks_data],
                 metadatas=[c["metadata"] for c in chunks_data]
             )
             self._indexed_documents.add(doc_key)
-            logger.info(f"Indexed {len(chunks_data)} chunks for document {filename} ({doc_key})")
+            
+            # Verify addition
+            new_count = self._collection.count()
+            logger.info(f"  ✅ ChromaDB collection now has {new_count} total chunks")
+            logger.info(f"  ✅ Indexed {len(chunks_data)} chunks for document {filename} ({doc_key})")
             return len(chunks_data)
         except Exception as e:
-            logger.error(f"Error indexing document {doc_key}: {e}")
+            logger.error(f"  ❌ Error indexing document {doc_key}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return 0
 
     def delete_document(self, project_id: str, document_id: str) -> bool:
@@ -475,36 +511,69 @@ class RAGManager:
         # Build where clause for filtering
         where = None
         where_clauses = []
+        
+        # Separate clauses for filings vs documents
+        filing_clauses = []
+        document_clauses = []
 
         if accession_numbers:
-            where_clauses.append({
+            filing_clauses.append({
                 "accession_number": {"$in": accession_numbers}
             })
 
         if tickers:
-            where_clauses.append({
+            filing_clauses.append({
                 "ticker": {"$in": tickers}
             })
 
         if form_types:
-            where_clauses.append({
+            filing_clauses.append({
                 "form_type": {"$in": form_types}
             })
 
         if project_id:
-            where_clauses.append({
+            document_clauses.append({
                 "project_id": project_id
             })
 
         if document_ids:
-            where_clauses.append({
+            document_clauses.append({
                 "document_id": {"$in": document_ids}
             })
 
-        if len(where_clauses) == 1:
-            where = where_clauses[0]
-        elif len(where_clauses) > 1:
-            where = {"$and": where_clauses}
+        # Combine filing and document filters with OR logic
+        # Key insight: filings have accession_number, documents have project_id
+        # They are mutually exclusive, so we can use OR to search both
+        or_clauses = []
+        
+        if filing_clauses:
+            # For filings: all filing clauses must match (AND)
+            if len(filing_clauses) == 1:
+                filing_filter = filing_clauses[0]
+            else:
+                filing_filter = {"$and": filing_clauses}
+            or_clauses.append(filing_filter)
+        
+        if document_clauses:
+            # For documents: all document clauses must match (AND)
+            if len(document_clauses) == 1:
+                document_filter = document_clauses[0]
+            else:
+                document_filter = {"$and": document_clauses}
+            # Add source_type check to ensure we only get documents
+            document_filter_with_type = {
+                "$and": [
+                    document_filter,
+                    {"source_type": "document"}
+                ]
+            }
+            or_clauses.append(document_filter_with_type)
+        
+        # If we have both filings and documents, use OR
+        if len(or_clauses) == 1:
+            where = or_clauses[0]
+        elif len(or_clauses) > 1:
+            where = {"$or": or_clauses}
 
         # Query collection
         try:
@@ -531,17 +600,28 @@ class RAGManager:
                 similarity = 1 - distances[i]
 
                 if similarity >= similarity_threshold:
+                    chunk_metadata = metadatas[i] or {}
                     chunks.append(RetrievedChunk(
                         chunk_id=chunk_id,
                         content=documents[i] or "",
-                        metadata=metadatas[i] or {},
+                        metadata=chunk_metadata,
                         similarity_score=similarity
                     ))
+                else:
+                    # Log filtered chunks for debugging
+                    chunk_metadata = metadatas[i] or {}
+                    logger.debug(f"Chunk filtered by similarity threshold: {similarity:.3f} < {similarity_threshold}, "
+                               f"source_type={chunk_metadata.get('source_type', 'unknown')}, "
+                               f"filename={chunk_metadata.get('filename', 'N/A')}")
 
         # Sort by similarity (highest first)
         chunks.sort(key=lambda x: x.similarity_score, reverse=True)
 
-        logger.info(f"Retrieved {len(chunks)} chunks for query: {query[:50]}...")
+        # Log breakdown by source type
+        filing_chunks = [c for c in chunks if c.source_type == "filing"]
+        doc_chunks = [c for c in chunks if c.source_type == "document"]
+        logger.info(f"Retrieved {len(chunks)} chunks ({len(filing_chunks)} filings, {len(doc_chunks)} documents) "
+                   f"for query: {query[:50]}... (threshold={similarity_threshold})")
         return chunks
 
     def format_context(
@@ -720,9 +800,31 @@ class RAGManager:
 
         try:
             count = self._collection.count()
+            
+            # Count documents by source type
+            results = self._collection.get(include=["metadatas"])
+            doc_count = 0
+            filing_count = 0
+            project_ids = set()
+            
+            if results and results.get("metadatas"):
+                for metadata in results["metadatas"]:
+                    if metadata:
+                        source_type = metadata.get("source_type", "filing")
+                        if source_type == "document":
+                            doc_count += 1
+                            if metadata.get("project_id"):
+                                project_ids.add(metadata["project_id"])
+                        else:
+                            filing_count += 1
+            
             return {
                 "total_chunks": count,
+                "filing_chunks": filing_count,
+                "document_chunks": doc_count,
                 "indexed_filings": len(self._indexed_accessions),
+                "indexed_documents": len(self._indexed_documents),
+                "projects_with_docs": list(project_ids),
                 "collection_name": self.collection_name,
                 "embedding_provider": self.embedding_provider,
                 "embedding_model": self.embedding_model,

@@ -84,7 +84,10 @@ def get_rag_context(
 
     # Need at least some filter criteria
     if not accession_numbers and not project_id:
+        logger.info(f"No accession_numbers or project_id provided for RAG query")
         return "", 0
+
+    logger.info(f"RAG query: query='{query[:50]}...', accession_numbers={len(accession_numbers) if accession_numbers else 0}, project_id={project_id}")
 
     # Retrieve relevant chunks (from both filings and project documents)
     chunks = rag_manager.retrieve(
@@ -96,8 +99,13 @@ def get_rag_context(
     )
 
     if not chunks:
-        logger.info(f"No relevant chunks found for query: {query[:50]}...")
+        logger.info(f"No relevant chunks found for query: {query[:50]}... (accession_numbers={len(accession_numbers) if accession_numbers else 0}, project_id={project_id})")
         return "", 0
+    
+    # Log what types of chunks were retrieved
+    filing_chunks = [c for c in chunks if c.source_type == "filing"]
+    doc_chunks = [c for c in chunks if c.source_type == "document"]
+    logger.info(f"Retrieved {len(filing_chunks)} filing chunks and {len(doc_chunks)} document chunks")
 
     # Format context
     context = rag_manager.format_context(
@@ -212,9 +220,12 @@ def store_api_key(provider: str, key: str) -> tuple[bool, str]:
     if cred_mgr:
         success, result = cred_mgr.store_key(cred_provider, key)
         if success:
+            # Also store in session state so it's immediately available
+            session_key = f"{provider}_api_key"
+            st.session_state[session_key] = key
             return True, f"Saved to {result}"
-        return False, result
-    
+        logger.warning(f"Credential manager failed to store key: {result}")
+
     # Fallback to session state
     session_key = f"{provider}_api_key"
     st.session_state[session_key] = key
@@ -321,6 +332,9 @@ class SidebarConfig:
 
     # Active project
     active_project_id: Optional[str] = None
+    
+    # Custom system prompt
+    custom_system_prompt: Optional[str] = None
 
     def is_configured(self) -> bool:
         """Check if minimum configuration is provided."""
@@ -641,24 +655,37 @@ def render_sidebar() -> SidebarConfig:
             format_func=model_format
         )
 
+        # Custom System Prompt
+        with st.expander("Custom System Prompt", expanded=False):
+            # Initialize session state for custom prompt
+            if "custom_system_prompt" not in st.session_state:
+                st.session_state.custom_system_prompt = ""
+            
+            custom_prompt = st.text_area(
+                "Additional Instructions",
+                value=st.session_state.custom_system_prompt,
+                height=100,
+                placeholder="Add custom instructions for the AI...\n\nExample:\n- Focus on risk factors\n- Use bullet points\n- Be concise",
+                help="These instructions will be added to the system prompt"
+            )
+            st.session_state.custom_system_prompt = custom_prompt
+            config.custom_system_prompt = custom_prompt
+            
+            if custom_prompt:
+                st.caption(f"✓ Custom prompt active ({len(custom_prompt)} chars)")
+
         st.divider()
 
         # Company Settings with Load button
         st.subheader("Company")
 
-        col1, col2 = st.columns([3, 1])
+        ticker_input = st.text_input(
+            "Ticker Symbol",
+            placeholder="e.g., AAPL, MSFT",
+            help="Enter stock ticker for research"
+        ).upper().strip()
 
-        with col1:
-            ticker_input = st.text_input(
-                "Ticker Symbol",
-                placeholder="e.g., AAPL, MSFT",
-                help="Enter stock ticker for research"
-            ).upper().strip()
-
-        with col2:
-            st.write("")  # Spacing
-            st.write("")  # Spacing
-            load_ticker = st.button("Load", type="primary", use_container_width=True)
+        load_ticker = st.button("Load", type="primary", use_container_width=True, key="load_ticker_btn")
 
         config.ticker = ticker_input
 
@@ -804,29 +831,6 @@ def render_sidebar() -> SidebarConfig:
                 - **S-1**: IPO registration
                 - **13F-HR**: Institutional holdings
                 """)
-
-        st.divider()
-
-        # Loaded Context Section
-        st.subheader("Loaded Context")
-
-        if st.session_state.loaded_filings:
-            for i, lf in enumerate(st.session_state.loaded_filings):
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    sections_info = f" ({len(lf.sections)} sections)" if lf.sections else ""
-                    st.caption(f"• {lf.ticker} {lf.filing_info.display_name}{sections_info}")
-                with col2:
-                    if st.button("✕", key=f"remove_{i}", help="Remove from context"):
-                        st.session_state.loaded_filings.pop(i)
-                        st.rerun()
-
-            if st.button("Clear All", use_container_width=True):
-                st.session_state.loaded_filings = []
-                st.session_state.selected_filing_keys = set()
-                st.rerun()
-        else:
-            st.caption("No filings loaded yet")
 
         # Store loaded filings in config
         config.loaded_filings = st.session_state.loaded_filings
