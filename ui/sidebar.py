@@ -308,6 +308,9 @@ class SidebarConfig:
     # Loaded filings
     loaded_filings: List[LoadedFiling] = field(default_factory=list)
 
+    # Active project
+    active_project_id: Optional[str] = None
+
     def is_configured(self) -> bool:
         """Check if minimum configuration is provided."""
         return bool(self.api_key)
@@ -667,6 +670,19 @@ def render_sidebar() -> SidebarConfig:
                 st.caption(f"✓ {ticker_input} loaded")
             else:
                 st.caption(f"⚠ Click Load to fetch {ticker_input}")
+
+        st.divider()
+
+        # Projects Section
+        try:
+            from ui.projects_panel import render_projects_panel
+            active_project_id = render_projects_panel(current_ticker=ticker_input)
+            if active_project_id:
+                config.active_project_id = active_project_id
+        except ImportError as e:
+            logger.debug(f"Projects panel not available: {e}")
+        except Exception as e:
+            logger.error(f"Error rendering projects panel: {e}")
 
         st.divider()
 
