@@ -40,3 +40,7 @@ sentence-transformers>=2.2.0
 
 # Web Search (free, no API key required)
 duckduckgo-search>=4.0.0
+
+# Secure Credential Storage
+keyring>=24.0.0
+cryptography>=41.0.0
