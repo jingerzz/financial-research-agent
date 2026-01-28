@@ -57,6 +57,41 @@ def render_chat_interface(
     with col3:
         show_tools = st.checkbox("Show Tools", value=True, help="Show tool execution details")
 
+    # Context indicator - show what sources are available
+    context_info = []
+    loaded_count = len(st.session_state.get("loaded_filings", []))
+    if loaded_count > 0:
+        context_info.append(f"📋 {loaded_count} filing(s)")
+    
+    active_project = None
+    active_project_id = st.session_state.get("active_project_id")
+    if active_project_id:
+        try:
+            from ui.projects_panel import get_active_project
+            active_project = get_active_project()
+            if active_project and active_project.documents:
+                context_info.append(f"📄 {len(active_project.documents)} doc(s)")
+        except Exception:
+            pass
+    
+    # Show last context stats if available
+    last_stats = st.session_state.get("last_context_stats")
+    if context_info or last_stats:
+        with st.expander("📊 Context Sources", expanded=False):
+            if context_info:
+                st.caption(" | ".join(context_info))
+            
+            if last_stats:
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if last_stats.get("full_docs"):
+                        st.markdown(f"**Full docs:** {', '.join(last_stats['full_docs'][:3])}")
+                    if last_stats.get("rag_sources"):
+                        st.markdown(f"**RAG:** {', '.join(last_stats['rag_sources'])}")
+                with col_b:
+                    st.markdown(f"**Size:** {last_stats['total_chars']:,} chars")
+                    st.markdown(f"**~Tokens:** {last_stats['total_tokens_approx']:,}")
+
     st.divider()
 
     # Create a container for chat messages to keep them separate from input
@@ -158,18 +193,35 @@ def render_chat_interface(
                 combined_context = "\n\n".join(context_parts)
                 agent.set_context(combined_context)
                 
-                # Show user-friendly toast
+                # Build detailed context stats for display
+                context_stats = {
+                    "full_docs": full_doc_names,
+                    "rag_sources": rag_source_info,
+                    "total_chars": len(combined_context),
+                    "total_tokens_approx": len(combined_context) // 4,  # Rough estimate
+                }
+                st.session_state.last_context_stats = context_stats
+                
+                # Show user-friendly toast with stats
                 source_parts = []
                 if full_doc_names:
                     source_parts.append(f"{len(full_doc_names)} full doc(s)")
                 if rag_source_info:
                     source_parts.append(f"RAG from {', '.join(rag_source_info)}")
                 
+                # Add context size info
+                context_kb = len(combined_context) / 1024
+                if context_kb > 100:
+                    size_str = f"{context_kb/1024:.1f}MB"
+                else:
+                    size_str = f"{context_kb:.0f}KB"
+                
                 if source_parts:
-                    st.toast(f"Using: {', '.join(source_parts)}", icon="📄")
-                logger.info(f"Total context: {len(combined_context)} chars")
+                    st.toast(f"📄 Context: {', '.join(source_parts)} ({size_str})", icon="📄")
+                logger.info(f"Total context: {len(combined_context)} chars (~{len(combined_context)//4} tokens)")
             else:
                 agent.set_context(None)
+                st.session_state.last_context_stats = None
                 if has_project_documents:
                     st.toast("⚠️ Could not load document content. Try re-uploading.", icon="⚠️")
                     logger.warning("Have project documents but could not generate context")

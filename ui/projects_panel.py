@@ -374,9 +374,40 @@ def render_project_details(project, project_mgr, current_ticker: str):
                         file_content = uploaded_file.read()
                         logger.info(f"  -> Read {len(file_content)} bytes from {uploaded_file.name}")
                         
+                        # Size limits
+                        MAX_FILE_SIZE_MB = 50
+                        MAX_PROJECT_SIZE_MB = 500
+                        MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+                        MAX_PROJECT_SIZE_BYTES = MAX_PROJECT_SIZE_MB * 1024 * 1024
+                        
                         if len(file_content) == 0:
                             logger.error(f"  -> File content is empty!")
-                            st.error(f"❌ {uploaded_file.name} is empty or could not be read")
+                            st.error(f"❌ **{uploaded_file.name}** is empty or could not be read")
+                            st.caption("💡 Try re-saving the file or converting to a different format")
+                            st.session_state[processing_key].discard(file_key)
+                            failed_count += 1
+                            failed_names.append(uploaded_file.name)
+                            continue
+                        
+                        # Check file size limit
+                        if len(file_content) > MAX_FILE_SIZE_BYTES:
+                            file_size_mb = len(file_content) / (1024 * 1024)
+                            logger.error(f"  -> File too large: {file_size_mb:.1f}MB (max {MAX_FILE_SIZE_MB}MB)")
+                            st.error(f"❌ **{uploaded_file.name}** is too large ({file_size_mb:.1f}MB)")
+                            st.caption(f"💡 Maximum file size is {MAX_FILE_SIZE_MB}MB. Try compressing the file or splitting it.")
+                            st.session_state[processing_key].discard(file_key)
+                            failed_count += 1
+                            failed_names.append(uploaded_file.name)
+                            continue
+                        
+                        # Check project size limit
+                        current_project_size = project.get_total_size()
+                        if current_project_size + len(file_content) > MAX_PROJECT_SIZE_BYTES:
+                            current_mb = current_project_size / (1024 * 1024)
+                            file_mb = len(file_content) / (1024 * 1024)
+                            logger.error(f"  -> Project size limit exceeded: {current_mb:.1f}MB + {file_mb:.1f}MB > {MAX_PROJECT_SIZE_MB}MB")
+                            st.error(f"❌ Project size limit exceeded")
+                            st.caption(f"💡 Current: {current_mb:.1f}MB, Adding: {file_mb:.1f}MB, Max: {MAX_PROJECT_SIZE_MB}MB. Remove some documents first.")
                             st.session_state[processing_key].discard(file_key)
                             failed_count += 1
                             failed_names.append(uploaded_file.name)
@@ -425,9 +456,14 @@ def render_project_details(project, project_mgr, current_ticker: str):
                         if not doc_processor:
                             logger.warning(f"  -> ❌ No document processor available")
                             st.error(f"❌ Document processor not available")
+                            st.caption("💡 Install dependencies: `pip install PyPDF2 python-docx beautifulsoup4`")
                         else:
-                            logger.warning(f"  -> ❌ Unsupported file type: {uploaded_file.name}")
-                            st.error(f"❌ Unsupported file type: {uploaded_file.name}")
+                            # Get file extension
+                            import os
+                            ext = os.path.splitext(uploaded_file.name)[1].lower()
+                            logger.warning(f"  -> ❌ Unsupported file type: {uploaded_file.name} (ext: {ext})")
+                            st.error(f"❌ Unsupported file type: **{uploaded_file.name}**")
+                            st.caption(f"💡 Supported formats: PDF, Word (.docx), Text (.txt), Markdown (.md), CSV, Excel (.xlsx), HTML\n\nTry converting '{ext}' to one of these formats.")
                         # Remove from processing set
                         st.session_state[processing_key].discard(file_key)
                 except Exception as e:
@@ -600,16 +636,51 @@ def render_project_details(project, project_mgr, current_ticker: str):
         if project.documents:
             st.markdown("*Documents:*")
             for doc in project.documents:
-                col1, col2 = st.columns([5, 1])
+                col1, col2, col3 = st.columns([4, 1, 1])
                 with col1:
                     icon = "✓" if doc.indexed else "○"
                     size_kb = doc.size_bytes / 1024
                     size_str = f"{size_kb:.1f}KB" if size_kb < 1024 else f"{size_kb/1024:.1f}MB"
                     st.caption(f"{icon} {doc.original_name} ({size_str})")
                 with col2:
+                    if st.button("👁", key=f"preview_doc_{doc.id}", help="Preview extracted text"):
+                        st.session_state[f"show_preview_{doc.id}"] = True
+                with col3:
                     if st.button("✕", key=f"remove_doc_{doc.id}", help="Remove"):
                         project_mgr.remove_document(project.id, doc.id)
                         st.rerun()
+                
+                # Show preview if requested
+                if st.session_state.get(f"show_preview_{doc.id}"):
+                    with st.expander(f"Preview: {doc.original_name}", expanded=True):
+                        doc_path = project_mgr._get_project_documents_dir(project.id) / doc.filename
+                        if doc_path.exists():
+                            try:
+                                file_content = doc_path.read_bytes()
+                                processed = doc_processor.process(file_content, doc.original_name)
+                                if processed.text:
+                                    # Show first 2000 characters
+                                    preview_text = processed.text[:2000]
+                                    if len(processed.text) > 2000:
+                                        preview_text += f"\n\n... ({len(processed.text) - 2000:,} more characters)"
+                                    st.text_area(
+                                        "Extracted Text",
+                                        value=preview_text,
+                                        height=200,
+                                        disabled=True,
+                                        key=f"preview_text_{doc.id}"
+                                    )
+                                    st.caption(f"Total: {len(processed.text):,} chars, {processed.word_count:,} words")
+                                else:
+                                    st.warning("No text could be extracted from this document")
+                            except Exception as e:
+                                st.error(f"Error reading document: {e}")
+                        else:
+                            st.error("Document file not found on disk")
+                        
+                        if st.button("Close Preview", key=f"close_preview_{doc.id}"):
+                            st.session_state[f"show_preview_{doc.id}"] = False
+                            st.rerun()
     
     # Add current SEC filings to project
     if "loaded_filings" in st.session_state and st.session_state.loaded_filings:

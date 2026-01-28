@@ -335,6 +335,9 @@ class SidebarConfig:
     
     # Custom system prompt
     custom_system_prompt: Optional[str] = None
+    
+    # Advanced settings
+    full_doc_threshold_kb: int = 1500  # Hybrid mode threshold in KB
 
     def is_configured(self) -> bool:
         """Check if minimum configuration is provided."""
@@ -859,6 +862,79 @@ def render_sidebar() -> SidebarConfig:
                     type="password",
                     help="Get from newsapi.org for enhanced news search"
                 )
+
+        st.divider()
+
+        # Advanced Settings
+        st.subheader("Advanced Settings")
+        
+        with st.expander("RAG & Document Settings"):
+            # Hybrid mode threshold slider
+            threshold = st.slider(
+                "Full Document Threshold (KB)",
+                min_value=0,
+                max_value=5000,
+                value=st.session_state.get("full_doc_threshold_kb", 1500),
+                step=100,
+                help="Documents smaller than this are included in full. Larger documents use RAG chunking. Set to 0 to always use RAG."
+            )
+            st.session_state.full_doc_threshold_kb = threshold
+            config.full_doc_threshold_kb = threshold
+            
+            # Update config object
+            from config import get_config
+            app_config = get_config()
+            app_config.rag.full_doc_threshold_kb = threshold
+            
+            st.caption(f"Current: {threshold}KB ({threshold/1024:.1f}MB)")
+        
+        with st.expander("Custom AI Instructions"):
+            # Prompt templates
+            PROMPT_TEMPLATES = {
+                "None": "",
+                "Risk Analysis Focus": "Focus your analysis on risk factors, potential concerns, and threats to the business. Highlight any new or changing risks.",
+                "Financial Deep Dive": "Provide detailed financial analysis with specific numbers, ratios, and trends. Compare metrics across periods when possible.",
+                "Competitive Analysis": "Analyze the company's competitive position, market share, and how it compares to industry peers.",
+                "Executive Summary": "Provide concise, executive-level summaries. Focus on key takeaways and actionable insights.",
+                "Technical Analysis": "When discussing price data, focus on technical patterns, support/resistance levels, and momentum indicators.",
+            }
+            
+            selected_template = st.selectbox(
+                "Prompt Template",
+                options=list(PROMPT_TEMPLATES.keys()),
+                index=0,
+                help="Select a preset template or choose 'None' to write custom instructions"
+            )
+            
+            # Get current custom prompt from session state
+            current_prompt = st.session_state.get("custom_system_prompt", "")
+            
+            # If template selected, use it as default
+            if selected_template != "None" and not current_prompt:
+                current_prompt = PROMPT_TEMPLATES[selected_template]
+            
+            # Custom prompt text area
+            custom_prompt = st.text_area(
+                "Custom Instructions",
+                value=current_prompt,
+                height=100,
+                placeholder="Add custom instructions for the AI...\n\nExample: Focus on quarterly revenue trends and margin analysis.",
+                help="These instructions will be added to every conversation"
+            )
+            
+            # Apply template button
+            if selected_template != "None":
+                if st.button("Apply Template", use_container_width=True):
+                    custom_prompt = PROMPT_TEMPLATES[selected_template]
+                    st.session_state.custom_system_prompt = custom_prompt
+                    st.rerun()
+            
+            # Save custom prompt to session state
+            st.session_state.custom_system_prompt = custom_prompt
+            config.custom_system_prompt = custom_prompt
+            
+            if custom_prompt:
+                st.caption(f"✓ Custom instructions active ({len(custom_prompt)} chars)")
 
         st.divider()
 

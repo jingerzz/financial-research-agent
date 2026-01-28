@@ -113,9 +113,11 @@ financial-research-agent/
 - Create named projects to organize research (e.g., "AAPL Deep Dive", "Tech Sector Analysis")
 - Add SEC filings from EDGAR and uploaded documents to projects
 - Drag-and-drop file upload for PDFs, Word documents, spreadsheets, and more
+- **Document preview**: View extracted text to verify processing worked correctly
 - All documents are indexed for semantic search
 - Auto-create default project when loading a ticker
 - Projects persist across sessions
+- File limits: 50MB per file, 500MB per project
 
 ### Secure API Key Storage
 - Keys persist across browser refreshes (no more re-entering!)
@@ -154,10 +156,13 @@ financial-research-agent/
 - Tool visibility for transparency
 - Multi-provider support: Anthropic Claude, OpenAI GPT, and Google Gemini
 - **Custom system prompt**: Add your own instructions to customize the AI's behavior
+- **Prompt templates**: Pre-built templates for risk analysis, financial deep dive, competitive analysis, etc.
+- **Context indicator**: See what documents and sources are being used for each query
 
 ### RAG (Retrieval-Augmented Generation)
 - Semantic search over SEC filings and uploaded project documents
-- **Hybrid mode**: Small documents (<1.5MB) are included in full; large files use RAG chunking
+- **Hybrid mode**: Small documents are included in full; large files use RAG chunking
+- **Configurable threshold**: Adjust the full-document size threshold in Advanced Settings (default 1.5MB)
 - ChromaDB vector database for fast similarity search
 - Automatic chunking of filings by SEC sections (Item 1, 1A, 7, etc.)
 - Sentence-transformers for local embeddings (no API calls required)
