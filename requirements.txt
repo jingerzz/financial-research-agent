@@ -1,0 +1,42 @@
+# Financial Research Agent - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core Web Framework
+streamlit>=1.28.0
+
+# Data Processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization
+plotly>=5.18.0
+
+# File Handling
+openpyxl>=3.1.0
+
+# LLM Providers
+anthropic>=0.18.0    # Claude API
+openai>=1.0.0        # OpenAI API
+google-generativeai>=0.8.0  # Google Gemini API
+
+# SEC EDGAR
+edgartools>=2.0.0    # SEC filing retrieval and parsing
+
+# Stock Data
+yfinance>=0.2.31     # Yahoo Finance data
+
+# HTTP Requests
+requests>=2.31.0
+
+# Caching (optional but recommended)
+diskcache>=5.6.0
+
+# Rate Limiting (optional)
+ratelimit>=2.2.1
+
+# RAG (Retrieval-Augmented Generation)
+chromadb>=0.4.22
+sentence-transformers>=2.2.0
+
+# Web Search (free, no API key required)
+duckduckgo-search>=4.0.0
