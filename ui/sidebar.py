@@ -48,13 +48,18 @@ def get_rag_manager():
     return st.session_state.rag_manager
 
 
-def get_rag_context(query: str, accession_numbers: Optional[List[str]] = None) -> tuple[str, int]:
+def get_rag_context(
+    query: str,
+    accession_numbers: Optional[List[str]] = None,
+    project_id: Optional[str] = None
+) -> tuple[str, int]:
     """
     Retrieve relevant context using RAG for a query.
 
     Args:
         query: User query to search for
         accession_numbers: Optional list of accession numbers to filter by
+        project_id: Optional project ID to include project documents
 
     Returns:
         Tuple of (context string, number of chunks retrieved)
@@ -73,14 +78,20 @@ def get_rag_context(query: str, accession_numbers: Optional[List[str]] = None) -
             for lf in st.session_state.loaded_filings:
                 accession_numbers.append(lf.filing_info.accession_number)
 
-    if not accession_numbers:
+    # Get project_id from session state if not provided
+    if project_id is None:
+        project_id = st.session_state.get("active_project_id")
+
+    # Need at least some filter criteria
+    if not accession_numbers and not project_id:
         return "", 0
 
-    # Retrieve relevant chunks
+    # Retrieve relevant chunks (from both filings and project documents)
     chunks = rag_manager.retrieve(
         query=query,
         top_k=config.rag.top_k,
-        accession_numbers=accession_numbers,
+        accession_numbers=accession_numbers if accession_numbers else None,
+        project_id=project_id,
         similarity_threshold=config.rag.similarity_threshold
     )
 

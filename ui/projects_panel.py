@@ -42,6 +42,72 @@ def get_document_processor():
     return st.session_state.document_processor
 
 
+def get_rag_manager():
+    """Get the RAG manager from sidebar module."""
+    try:
+        from ui.sidebar import get_rag_manager as sidebar_get_rag_manager
+        return sidebar_get_rag_manager()
+    except Exception:
+        return None
+
+
+def index_document_for_rag(
+    project_id: str,
+    document_id: str,
+    file_content: bytes,
+    filename: str,
+    file_type: str
+) -> int:
+    """
+    Process and index a document for RAG search.
+    
+    Args:
+        project_id: Project ID
+        document_id: Document ID
+        file_content: Raw file content
+        filename: Original filename
+        file_type: File type
+        
+    Returns:
+        Number of chunks indexed
+    """
+    doc_processor = get_document_processor()
+    rag_manager = get_rag_manager()
+    
+    if not doc_processor or not rag_manager:
+        logger.warning("Document processor or RAG manager not available")
+        return 0
+    
+    try:
+        # Extract text from document
+        processed = doc_processor.process(file_content, filename)
+        
+        if not processed.text:
+            logger.warning(f"No text extracted from {filename}")
+            return 0
+        
+        # Index into RAG
+        chunk_count = rag_manager.index_document(
+            content=processed.text,
+            project_id=project_id,
+            document_id=document_id,
+            filename=filename,
+            file_type=file_type
+        )
+        
+        # Update project metadata
+        project_mgr = get_project_manager()
+        if project_mgr and chunk_count > 0:
+            project_mgr.mark_document_indexed(project_id, document_id, chunk_count)
+        
+        logger.info(f"Indexed {chunk_count} chunks for {filename}")
+        return chunk_count
+        
+    except Exception as e:
+        logger.error(f"Error indexing document {filename}: {e}")
+        return 0
+
+
 def render_projects_panel(current_ticker: str = "") -> Optional[str]:
     """
     Render the projects panel in the sidebar.
@@ -237,6 +303,12 @@ def render_project_details(project, project_mgr, current_ticker: str):
                 
                 if doc:
                     st.success(f"Added: {uploaded_file.name}")
+                    
+                    # Index document for RAG
+                    try:
+                        index_document_for_rag(project.id, doc.id, file_content, uploaded_file.name, file_type)
+                    except Exception as e:
+                        logger.warning(f"Failed to index document for RAG: {e}")
                 else:
                     st.error(f"Failed to add: {uploaded_file.name}")
             else:
