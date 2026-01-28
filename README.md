@@ -155,7 +155,8 @@ financial-research-agent/
 - Multi-provider support: Anthropic Claude, OpenAI GPT, and Google Gemini
 
 ### RAG (Retrieval-Augmented Generation)
-- Semantic search over SEC filings using ChromaDB vector database
+- Semantic search over SEC filings and uploaded project documents
+- ChromaDB vector database for fast similarity search
 - Automatic chunking of filings by SEC sections (Item 1, 1A, 7, etc.)
 - Sentence-transformers for local embeddings (no API calls required)
 - Intelligent context retrieval for more accurate responses
