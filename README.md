@@ -16,7 +16,7 @@ A comprehensive financial research tool combining SEC filing analysis, stock pri
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/YOUR_USERNAME/financial-research-agent.git
+git clone https://github.com/jingerzz/financial-research-agent.git
 cd financial-research-agent
 ```
 
@@ -28,6 +28,10 @@ pip install -r requirements.txt
 3. Configure API keys (optional):
    - Create a `.streamlit/secrets.toml` file (see `.streamlit/secrets.toml.example`)
    - Or enter API keys directly in the Streamlit sidebar when running the app
+
+4. (Recommended) Update SEC EDGAR user agent in `config.py`:
+   - The SEC requires identification when accessing EDGAR
+   - Change `user_agent` from `research@example.com` to your email
 
 ## Usage
 
