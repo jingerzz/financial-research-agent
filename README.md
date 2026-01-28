@@ -6,8 +6,9 @@ A comprehensive financial research tool combining SEC filing analysis, stock pri
 
 - **SEC Filing Analysis**: Extract and analyze information from 10-K, 10-Q, 8-K, and other SEC filings
 - **Price Analysis**: Interactive charts, identify significant price events (all-time highs/lows, rallies, drawdowns)
-- **News Search**: Search for relevant news articles using multiple backends (Anthropic Claude, NewsAPI, cached historical data)
-- **Conversational AI**: Ask questions about companies, financials, and market events using Claude or OpenAI
+- **News Search**: Search for relevant news articles using multiple backends (DuckDuckGo free search, Anthropic Claude, NewsAPI, cached historical data)
+- **Conversational AI**: Ask questions about companies, financials, and market events using Claude, OpenAI, or Google Gemini
+- **RAG (Retrieval-Augmented Generation)**: Semantic search over SEC filings using ChromaDB and sentence-transformers
 - **Pre-built Workflows**: Automated analysis workflows for financial health, risk analysis, and competitive comparison
 - **Data Upload**: Upload your own price history CSV/Excel files for analysis
 
@@ -40,7 +41,7 @@ The app will open in your browser at `http://localhost:8501`.
 
 ### Getting Started
 
-1. **Configure API Key**: In the sidebar, select your LLM provider (Anthropic or OpenAI) and enter your API key
+1. **Configure API Key**: In the sidebar, select your LLM provider (Anthropic, OpenAI, or Google Gemini) and enter your API key
 2. **Enter Ticker**: Type a stock ticker symbol (e.g., AAPL, MSFT, GOOGL)
 3. **Use the Interface**:
    - **Research Chat**: Ask questions about companies and financials
@@ -70,7 +71,9 @@ financial-research-agent/
 ├── data/
 │   ├── sec_edgar.py     # SEC EDGAR filing retrieval
 │   ├── price_analyzer.py # Stock price analysis
-│   └── news_search.py   # News search backends
+│   ├── news_search.py   # News search backends
+│   ├── rag_manager.py   # RAG vector storage with ChromaDB
+│   └── chunking.py      # SEC filing chunking for RAG
 ├── ui/
 │   ├── chat_interface.py      # Chat UI component
 │   ├── price_analysis_tab.py  # Price analysis UI
@@ -89,7 +92,9 @@ financial-research-agent/
 - API keys for:
   - Anthropic Claude (optional, for Claude AI)
   - OpenAI (optional, for GPT models)
+  - Google AI (optional, for Gemini models)
   - NewsAPI (optional, for enhanced news search)
+- Note: DuckDuckGo search works without any API key
 
 ## Features in Detail
 
@@ -107,7 +112,9 @@ financial-research-agent/
 
 ### News Search
 - Multiple backend support:
+  - DuckDuckGo (free, no API key required - default)
   - Anthropic Claude with web search
+  - OpenAI (uses training data for historical context)
   - NewsAPI.org
   - Cached historical market events
 - Automatic fallback to available backends
@@ -117,6 +124,13 @@ financial-research-agent/
 - Context-aware responses using SEC filings, price data, and news
 - Support for follow-up questions
 - Tool visibility for transparency
+- Multi-provider support: Anthropic Claude, OpenAI GPT, and Google Gemini
+
+### RAG (Retrieval-Augmented Generation)
+- Semantic search over SEC filings using ChromaDB vector database
+- Automatic chunking of filings by SEC sections (Item 1, 1A, 7, etc.)
+- Sentence-transformers for local embeddings (no API calls required)
+- Intelligent context retrieval for more accurate responses
 
 ## License
 
@@ -135,4 +149,6 @@ This tool is for research and educational purposes only. It is not intended as f
 - Built with [Streamlit](https://streamlit.io/)
 - Uses [edgartools](https://github.com/dgunning/edgartools) for SEC EDGAR access
 - Uses [yfinance](https://github.com/ranaroussi/yfinance) for stock data
-- Powered by [Anthropic Claude](https://www.anthropic.com/) and [OpenAI](https://openai.com/)
+- Uses [ChromaDB](https://www.trychroma.com/) for vector storage
+- Uses [sentence-transformers](https://www.sbert.net/) for embeddings
+- Powered by [Anthropic Claude](https://www.anthropic.com/), [OpenAI](https://openai.com/), and [Google Gemini](https://ai.google.dev/)
