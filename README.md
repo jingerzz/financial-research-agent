@@ -153,9 +153,11 @@ financial-research-agent/
 - Support for follow-up questions
 - Tool visibility for transparency
 - Multi-provider support: Anthropic Claude, OpenAI GPT, and Google Gemini
+- **Custom system prompt**: Add your own instructions to customize the AI's behavior
 
 ### RAG (Retrieval-Augmented Generation)
 - Semantic search over SEC filings and uploaded project documents
+- **Hybrid mode**: Small documents (<1.5MB) are included in full; large files use RAG chunking
 - ChromaDB vector database for fast similarity search
 - Automatic chunking of filings by SEC sections (Item 1, 1A, 7, etc.)
 - Sentence-transformers for local embeddings (no API calls required)
